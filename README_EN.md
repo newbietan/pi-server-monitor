@@ -34,32 +34,6 @@ Specifically designed for deep learning model training and cloud GPU clusters.
 
 ---
 
-## Architecture & Design
-
-```text
-┌─────────────────────────────────────────────────────────────┐
-│                       Pi Agent TUI                          │
-│                                                             │
-│  tan@gpu-node  │  CPU 42% (32C)  │  GPU [A100] 88% ...      │
-│  ─────────────────────────────────────────────────────────  │
-│  User Prompt Editor / Conversation Area                     │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                 [ResourceCollector (2s)]
-                           │ (SSH ControlMaster /tmp/pi-mon-*.sock)
-                           ▼
-              Remote Server (Linux GPU Host)
-                           │
-             [Embedded Fast Python / Shell Probe]
-                           │
-      ┌────────────────────┼────────────────────┐
-      ▼                    ▼                    ▼
- /proc/stat           /proc/meminfo        nvidia-smi
- (CPU & Cores)         (RAM & Avail)   (GPU, VRAM)
-```
-
----
-
 ## Installation
 
 ### 1. Install via npm (Recommended)
@@ -89,18 +63,6 @@ pi -e npm:pi-server-monitor
 
 ```bash
 pi install github:newbietan/pi-server-monitor
-```
-
-### 4. Local Development Installation
-
-If you clone the repository locally for development:
-
-```bash
-# Global installation from local path
-pi install ./pi-server-monitor
-
-# Or temporary session load from built artifact
-pi --extension ./pi-server-monitor/dist/index.js
 ```
 
 ---
@@ -157,24 +119,7 @@ The extension automatically registers `get_remote_hardware_info` for the AI Agen
 - **Remote Server**:
   - Linux (Ubuntu/Debian/CentOS/Rocky, etc.)
   - Python 3 (standard library only; shell fallback is used if Python is absent)
-  - `nvidia-smi` (for NVIDIA GPU metrics)
-
----
-
-## Development & Testing
-
-```bash
-cd pi-server-monitor
-
-# Install dependencies
-npm install
-
-# Build TypeScript
-npm run build
-
-# Run unit tests
-npm test
-```
+  - `nvidia-smi`（for NVIDIA GPU metrics）
 
 ---
 

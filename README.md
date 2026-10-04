@@ -34,32 +34,6 @@
 
 ---
 
-## 架构设计
-
-```text
-┌─────────────────────────────────────────────────────────────┐
-│                       Pi Agent TUI                          │
-│                                                             │
-│  tan@gpu-node  │  CPU 42% (32C)  │  GPU [A100] 88% ...      │
-│  ─────────────────────────────────────────────────────────  │
-│  User Prompt Editor / Conversation Area                     │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                 [ResourceCollector (2s)]
-                           │ (SSH ControlMaster /tmp/pi-mon-*.sock)
-                           ▼
-              Remote Server (Linux GPU Host)
-                           │
-             [Embedded Fast Python / Shell Probe]
-                           │
-      ┌────────────────────┼────────────────────┐
-      ▼                    ▼                    ▼
- /proc/stat           /proc/meminfo        nvidia-smi
- (CPU & Cores)         (RAM & Avail)   (GPU, VRAM)
-```
-
----
-
 ## 安装方法
 
 ### 1. 通过 npm 安装（推荐）
@@ -89,18 +63,6 @@ pi -e npm:pi-server-monitor
 
 ```bash
 pi install github:newbietan/pi-server-monitor
-```
-
-### 4. 本地源码二次开发与安装
-
-如果你克隆了本仓库进行开发，可以使用本地路径安装：
-
-```bash
-# 全局链接本地开发路径
-pi install ./pi-server-monitor
-
-# 或单次会话临时加载本地编译产物
-pi --extension ./pi-server-monitor/dist/index.js
 ```
 
 ---
@@ -158,23 +120,6 @@ pi --extension ./pi-server-monitor/dist/index.js
   - Linux（Ubuntu/Debian/CentOS/Rocky 等）
   - Python 3（使用系统标准库，无需任何额外 pip 安装；若无则自动降级使用纯 Shell 探针）
   - `nvidia-smi`（用于 NVIDIA GPU 状态采集）
-
----
-
-## 开发与测试
-
-```bash
-cd pi-server-monitor
-
-# 安装依赖
-npm install
-
-# 编译 TypeScript
-npm run build
-
-# 运行单元测试
-npm test
-```
 
 ---
 
