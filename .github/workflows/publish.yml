@@ -2,22 +2,39 @@
 name: Publish to npm
 
 on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '自定义版本号 (例如 0.2.1，若填写则优先使用)'
+        required: false
+        default: ''
+        type: string
+      version_type:
+        description: '自动递增类型 (未填写自定义版本号时生效)'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
   release:
     types: [published]
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
@@ -27,6 +44,27 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Configure Git user
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump version and push tag (workflow_dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_VERSION_TYPE: ${{ github.event.inputs.version_type }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            echo "Setting custom version to $INPUT_VERSION..."
+            npm version "$INPUT_VERSION" -m "chore(release): %s"
+          else
+            echo "Bumping $INPUT_VERSION_TYPE version..."
+            npm version "$INPUT_VERSION_TYPE" -m "chore(release): %s"
+          fi
+          git push origin main --follow-tags
 
       - name: Run test suite
         run: npm test

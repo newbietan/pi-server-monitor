@@ -1,6 +1,6 @@
 {
   "name": "pi-server-monitor",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Real-time remote SSH hardware resource monitor (CPU, RAM, GPU/VRAM) for Pi Agent model training",
   "author": "tanxin",
   "license": "MIT",
