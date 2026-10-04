@@ -176,3 +176,122 @@ export async function closeSshConnection(target: SshTarget): Promise<void> {
     }
   }
 }
+
+const EXCLUDED_HOSTS = new Set([
+  "github.com",
+  "gitlab.com",
+  "gitee.com",
+  "bitbucket.org",
+  "hf.co",
+  "huggingface.co",
+]);
+
+/**
+ * Automatically extract SSH remote target from a command string.
+ * Supports:
+ * - ssh [options] user@host[:port] [cmd]
+ * - scp [options] ... user@host:/path
+ * - sftp [options] user@host
+ * Excludes git hosting domains (github.com, gitlab.com, etc.)
+ */
+export function extractSshTargetFromCommand(cmd: string): string | null {
+  if (typeof cmd !== "string" || !cmd.trim()) return null;
+
+  // Ignore git commands that might reference git@github.com etc.
+  const isGitCmd = /^\s*git\s+/i.test(cmd.trim());
+  if (isGitCmd) return null;
+
+  // Regex to find ssh, scp, or sftp invocations
+  const regex = /(?:^|[;&|`$()]\s*|\b(?:sudo\s+)?)(ssh|scp|sftp)\s+([^;&|\n`$]+)/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(cmd)) !== null) {
+    const bin = match[1].toLowerCase();
+    const rawArgs = match[2].trim();
+
+    // Tokenize rawArgs respecting quotes
+    const tokens = rawArgs.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+    let explicitPort: string | undefined;
+    let target: string | undefined;
+
+    for (let i = 0; i < tokens.length; i++) {
+      let token = tokens[i].replace(/^['"]|['"]$/g, "");
+      if (!token) continue;
+
+      // Handle -p <port> or -P <port> (scp uses -P)
+      if (token === "-p" || (bin === "scp" && token === "-P")) {
+        if (i + 1 < tokens.length) {
+          explicitPort = tokens[i + 1].replace(/^['"]|['"]$/g, "");
+          i++;
+        }
+        continue;
+      }
+      if (/^-[pP](\d+)$/.test(token)) {
+        explicitPort = token.slice(2);
+        continue;
+      }
+
+      // Handle flags taking arguments
+      if (["-i", "-o", "-F", "-l", "-c", "-b", "-J", "-E"].includes(token)) {
+        i++; // skip next arg
+        continue;
+      }
+      // Handle -oKey=Val or -iKey
+      if (token.startsWith("-o") || token.startsWith("-i")) {
+        continue;
+      }
+      // Skip other flags
+      if (token.startsWith("-")) {
+        continue;
+      }
+
+      // First positional argument in ssh is the destination
+      if (bin === "ssh" || bin === "sftp") {
+        target = token;
+        break;
+      }
+
+      // In scp, destination could be one of the args matching [user@]host:path
+      if (bin === "scp") {
+        if (token.includes(":") && !token.startsWith(":") && !token.startsWith("./") && !token.startsWith("/")) {
+          const colonIdx = token.indexOf(":");
+          target = token.slice(0, colonIdx);
+          break;
+        }
+      }
+    }
+
+    if (target) {
+      // Strip potential path if user specified host:/path
+      if (target.includes(":")) {
+        const colonIdx = target.indexOf(":");
+        const possiblePortOrPath = target.slice(colonIdx + 1);
+        if (/^\d+$/.test(possiblePortOrPath)) {
+          // It's a port like host:2222
+          explicitPort = possiblePortOrPath;
+          target = target.slice(0, colonIdx);
+        } else {
+          // It's a path like host:/root
+          target = target.slice(0, colonIdx);
+        }
+      }
+
+      // Check user and host
+      let hostOnly = target;
+      if (target.includes("@")) {
+        hostOnly = target.slice(target.indexOf("@") + 1);
+      }
+
+      if (EXCLUDED_HOSTS.has(hostOnly.toLowerCase())) {
+        continue;
+      }
+
+      // Validate host name basic format (not a local filename or option)
+      if (/^[a-zA-Z0-9_.-]+$/.test(hostOnly) && !hostOnly.startsWith("-")) {
+        return explicitPort ? `${target}:${explicitPort}` : target;
+      }
+    }
+  }
+
+  return null;
+}

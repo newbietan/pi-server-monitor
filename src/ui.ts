@@ -194,6 +194,113 @@ function renderBottomBorder(intervalSec: number, maxWidth: number): string {
 }
 
 /**
+ * Render compact single-line widget content for placement above editor
+ * Takes up exactly 1 line, minimal and clean.
+ */
+export function renderCompactWidgetLines(
+  metrics: HardwareMetrics | null,
+  state: MonitorConnectionState,
+  target: SshTarget | null,
+  theme?: ThemeLike,
+  maxWidth = 200
+): string[] {
+  const targetLabel = target ? (target.user ? `${target.user}@${target.host}` : target.host) : "Remote";
+
+  if (state === "connecting" && !metrics) {
+    const text = `SSH [${targetLabel}]: 正在连接并探测硬件资源...`;
+    return [theme ? theme.fg("warning", text) : text];
+  }
+  if (state === "error" && !metrics) {
+    const text = `SSH [${targetLabel}]: 连接失败 (请检查 SSH 秘钥/端口)`;
+    return [theme ? theme.fg("error", text) : text];
+  }
+  if (!metrics) {
+    return [];
+  }
+
+  const parts: string[] = [];
+
+  // Target tag (no leading icon)
+  const hostTag = targetLabel;
+  parts.push(theme ? theme.bold(theme.fg("accent", hostTag)) : hostTag);
+
+  // CPU
+  const cpuPct = `${Math.round(metrics.cpu.percent)}%`;
+  const cpuColored =
+    theme && metrics.cpu.percent >= 85
+      ? theme.fg("error", cpuPct)
+      : theme && metrics.cpu.percent >= 60
+      ? theme.fg("warning", cpuPct)
+      : cpuPct;
+  parts.push(`CPU ${cpuColored} (${metrics.cpu.cores}C)`);
+
+  // RAM
+  const ramUsed = formatMb(metrics.memory.usedMb);
+  const ramTotal = formatMb(metrics.memory.totalMb);
+  const memPct = `${Math.round(metrics.memory.percent)}%`;
+  const memColored =
+    theme && metrics.memory.percent >= 85
+      ? theme.fg("error", memPct)
+      : theme && metrics.memory.percent >= 65
+      ? theme.fg("warning", memPct)
+      : memPct;
+  parts.push(`RAM ${ramUsed}/${ramTotal} (${memColored})`);
+
+  // GPU
+  if (!metrics.gpus || metrics.gpus.length === 0) {
+    const noGpu = theme ? theme.fg("dim", "CPU-only") : "CPU-only";
+    parts.push(noGpu);
+  } else if (metrics.gpus.length === 1) {
+    const g = metrics.gpus[0];
+    const shortName = g.name.replace(/NVIDIA /g, "").replace(/GeForce /g, "").trim().slice(0, 16);
+    const gpuCompute = `${Math.round(g.utilGpu)}%`;
+    const vramStr = `${formatMb(g.memoryUsedMb)}/${formatMb(g.memoryTotalMb)}`;
+    const vramPct = `${Math.round(g.memoryPercent)}%`;
+
+    const vramColored =
+      theme && g.memoryPercent >= 85
+        ? theme.fg("error", vramPct)
+        : theme && g.memoryPercent >= 65
+        ? theme.fg("warning", vramPct)
+        : vramPct;
+
+    let gpuSegment = `GPU [${shortName}] ${gpuCompute} │ VRAM ${vramStr} (${vramColored})`;
+    if (g.temperatureC !== null && g.temperatureC !== undefined) {
+      const tempColor = g.temperatureC > 82 ? "error" : g.temperatureC > 72 ? "warning" : "success";
+      gpuSegment += ` │ ${theme ? theme.fg(tempColor, `${g.temperatureC}°C`) : `${g.temperatureC}°C`}`;
+    }
+    if (g.powerDrawW !== null && g.powerDrawW !== undefined) {
+      gpuSegment += ` ${Math.round(g.powerDrawW)}W`;
+    }
+    parts.push(gpuSegment);
+  } else {
+    // Multi GPU
+    const avgUtil = Math.round(metrics.gpus.reduce((acc, g) => acc + g.utilGpu, 0) / metrics.gpus.length);
+    const totalUsed = metrics.gpus.reduce((acc, g) => acc + g.memoryUsedMb, 0);
+    const totalMem = metrics.gpus.reduce((acc, g) => acc + g.memoryTotalMb, 0);
+    const totalPct = Math.round((totalUsed / (totalMem || 1)) * 100);
+    const maxTemp = Math.max(...metrics.gpus.map((g) => g.temperatureC || 0));
+
+    const totalPctColored =
+      theme && totalPct >= 85
+        ? theme.fg("error", `${totalPct}%`)
+        : theme && totalPct >= 65
+        ? theme.fg("warning", `${totalPct}%`)
+        : `${totalPct}%`;
+
+    let gpuSegment = `${metrics.gpus.length}xGPU Avg ${avgUtil}% │ VRAM ${formatMb(totalUsed)}/${formatMb(totalMem)} (${totalPctColored})`;
+    if (maxTemp > 0) {
+      const tempColor = maxTemp > 82 ? "error" : maxTemp > 72 ? "warning" : "success";
+      gpuSegment += ` │ Max ${theme ? theme.fg(tempColor, `${maxTemp}°C`) : `${maxTemp}°C`}`;
+    }
+    parts.push(gpuSegment);
+  }
+
+  const rawLine = parts.join("  │  ");
+  return [maxWidth > 0 && visibleWidth(rawLine) > maxWidth ? truncateToWidth(rawLine, maxWidth) : rawLine];
+}
+
+/**
  * Render compact footer status text for ctx.ui.setStatus()
  */
 export function renderFooterStatus(

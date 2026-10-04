@@ -41,7 +41,7 @@ export interface HardwareMetrics {
 
 export type MonitorConnectionState = "idle" | "connecting" | "connected" | "error" | "stopped";
 
-export type DisplayMode = "widget" | "footer" | "both" | "none";
+export type DisplayMode = "compact" | "widget" | "footer" | "both" | "none";
 
 export interface MonitorConfig {
   target: string;

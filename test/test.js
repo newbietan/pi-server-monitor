@@ -1,10 +1,89 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseSshTarget, getControlPath } from "../dist/ssh.js";
+import { parseSshTarget, getControlPath, extractSshTargetFromCommand } from "../dist/ssh.js";
 import { parseProbeOutput } from "../dist/probe.js";
-import { renderWidgetLines, renderFooterStatus, formatMb, renderProgressBar } from "../dist/ui.js";
+import { renderWidgetLines, renderCompactWidgetLines, renderFooterStatus, formatMb, renderProgressBar } from "../dist/ui.js";
 import { ResourceCollector } from "../dist/collector.js";
 import { createRemoteHardwareTool } from "../dist/tool.js";
+
+test("extractSshTargetFromCommand - auto-detects targets correctly", () => {
+  // Basic ssh
+  assert.equal(extractSshTargetFromCommand("ssh root@10.0.0.1 'python train.py'"), "root@10.0.0.1");
+
+  // With port
+  assert.equal(extractSshTargetFromCommand("ssh -p 2222 user@gpu-node 'nvidia-smi'"), "user@gpu-node:2222");
+
+  // With various flags (-i, -o, etc.)
+  assert.equal(
+    extractSshTargetFromCommand("ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no admin@server.corp:8022 ls"),
+    "admin@server.corp:8022"
+  );
+
+  // In compound shell command
+  assert.equal(
+    extractSshTargetFromCommand("cd /workspace && ssh worker-1 'bash run.sh'"),
+    "worker-1"
+  );
+
+  // SCP command
+  assert.equal(extractSshTargetFromCommand("scp -P 22022 weights.pt user@storage-node:/data/"), "user@storage-node:22022");
+
+  // Excluded domains (github, gitlab, huggingface, etc.)
+  assert.equal(extractSshTargetFromCommand("git clone git@github.com:my-org/my-repo.git"), null);
+  assert.equal(extractSshTargetFromCommand("ssh -T git@github.com"), null);
+
+  // Non-SSH commands
+  assert.equal(extractSshTargetFromCommand("ls -la && echo 'hello'"), null);
+  assert.equal(extractSshTargetFromCommand(""), null);
+});
+
+test("renderCompactWidgetLines - renders ultra-compact single line", () => {
+  const metrics = {
+    timestamp: 1728000000,
+    cpu: { percent: 45.0, cores: 32 },
+    memory: { totalMb: 65536, usedMb: 32768, availMb: 32768, percent: 50.0 },
+    gpus: [
+      {
+        index: 0,
+        name: "NVIDIA A100-SXM4-80GB",
+        utilGpu: 92.0,
+        utilMem: 80.0,
+        memoryTotalMb: 81920,
+        memoryUsedMb: 65536,
+        memoryFreeMb: 16384,
+        memoryPercent: 80.0,
+        temperatureC: 67,
+        powerDrawW: 320,
+      },
+    ],
+    processes: [{ pid: 48219, name: "python", usedMemoryMb: 64000 }],
+  };
+
+  const target = { user: "trainer", host: "gpu-01", raw: "trainer@gpu-01" };
+  const lines = renderCompactWidgetLines(metrics, "connected", target);
+
+  // Exactly 1 line
+  assert.equal(lines.length, 1);
+  const line = lines[0];
+  assert.ok(!line.includes("🖥️"));
+  assert.ok(!line.includes("PID"));
+  assert.ok(line.includes("trainer@gpu-01"));
+  assert.ok(line.includes("CPU 45% (32C)"));
+  assert.ok(line.includes("RAM 32.0 GB/64.0 GB"));
+  assert.ok(line.includes("GPU [A100-SXM4-80GB] 92%"));
+  assert.ok(line.includes("VRAM 64.0 GB/80.0 GB (80%)"));
+  assert.ok(line.includes("67°C"));
+
+  // Connecting state
+  const connectingLines = renderCompactWidgetLines(null, "connecting", target);
+  assert.equal(connectingLines.length, 1);
+  assert.ok(connectingLines[0].includes("正在连接"));
+
+  // Error state
+  const errorLines = renderCompactWidgetLines(null, "error", target);
+  assert.equal(errorLines.length, 1);
+  assert.ok(errorLines[0].includes("连接失败"));
+});
 
 test("parseSshTarget - parses various formats", () => {
   const t1 = parseSshTarget("root@192.168.1.100");
