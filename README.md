@@ -1,51 +1,47 @@
-# pi-server-monitor 🖥️⚡
+<div align="center">
+
+# pi-server-monitor
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Pi Package](https://img.shields.io/badge/Pi%20Package-Extension-green.svg)](https://pi.dev)
+[![npm version](https://img.shields.io/npm/v/pi-server-monitor.svg)](https://www.npmjs.com/package/pi-server-monitor)
 
-A high-performance real-time remote server hardware monitoring extension for [Pi Agent](https://pi.dev).
+适用于 Pi Agent 的高性能远程 SSH 硬件资源实时监控扩展插件。  
+专为深度学习模型训练与远程 GPU 集群环境设计。
 
-Specifically designed for **Deep Learning Model Training & Remote Cloud GPU Clusters** (AutoDL, RunPod, Lambda Labs, Vast.ai, Slurm nodes, or private GPU servers).
+[English Documentation](README_EN.md)
 
----
-
-## 🚀 Key Features
-
-- **⚡ Zero-Lag SSH Connection Multiplexing (OpenSSH ControlMaster)**:
-  Uses OpenSSH `ControlMaster` socket multiplexing. After the initial connection, subsequent metric polls take only **10–20ms** with zero TCP/SSH re-authentication overhead.
-- **📊 Real-Time TUI Dashboard Widget**:
-  Renders directly above the prompt editor (`aboveEditor`) with ANSI color-coded progress bars:
-  - **CPU Utilization & Core Count** (with load averages)
-  - **System RAM Usage** (Used / Total in GB, percentage, available memory)
-  - **GPU Model & Compute Utilization** (`NVIDIA A100`, `RTX 4090`, `H100`, etc.)
-  - **VRAM (GPU Memory) Usage** (Used / Total in GB, percentage, free headroom)
-  - **Hardware Health**: GPU temperature (°C) & Power draw vs. limit (W)
-  - **Active Deep Learning Processes**: Detects `python train.py` PID and per-process VRAM allocation
-- **🤖 Native AI Agent Tool (`get_remote_hardware_info`)**:
-  Exposes a structured tool to Pi Agent. The LLM can proactively check GPU memory headroom before tuning batch sizes, verify whether a training script actually started on the GPU, or diagnose data loader bottlenecks (e.g., GPU dropping to 0%).
-- **🎮 Multi-Card & Cluster Support**:
-  Gracefully handles single-GPU workstations, multi-GPU nodes (2x/4x/8x GPUs), and CPU-only servers.
-- **🔄 Flexible Display Modes**:
-  - `widget`: Interactive ASCII dashboard box above the editor (default)
-  - `footer`: Compact single-line status in the footer bar
-  - `both`: Both widget and footer
-  - `none`: Silent background mode (tool queries still work)
+</div>
 
 ---
 
-## 📦 Architecture & Design
+## 核心特性
+
+- **无感知自动激活**：默认保持完全静默与零资源占用。当 AI Agent 在执行命令中调用 SSH（如 `bash: ssh user@host ...` 或 `scp`）时，插件自动捕获目标主机并毫秒级激活监控，无需手动输入连接指令。
+- **超紧凑单行展示**：默认仅在终端输入框正上方（`aboveEditor`）显示单行状态，去除冗余图标与系统进程信息，不遮挡任何对话流或输入区域：
+  ```text
+  tan@100.111.71.70  │  CPU 0% (12C)  │  RAM 2.0 GB/30.6 GB (6%)  │  GPU [RTX 3070] 0% │ VRAM 130 MB/8.0 GB (2%) │ 47°C 17W
+  ```
+- **连接复用（OpenSSH ControlMaster）**：基于 OpenSSH 套接字复用技术，一次建立连接后，后续轮询开销仅 10–20ms，无重新鉴权开销。
+- **智能体原生工具 (`get_remote_hardware_info`)**：为 Pi Agent 提供硬件自省工具，LLM 可在调参、调 batch size 前主动感知剩余显存，或诊断训练进程与数据加载瓶颈。
+- **多卡与单卡自适应**：原生适配单卡训练节点、多卡集群（2卡/4卡/8卡）及无 GPU 的纯 CPU 服务器。
+- **灵活的显示模式**：
+  - `compact`：输入框上方极简单行展示（默认）
+  - `widget`：多行 ASCII 仪表盘卡片
+  - `footer`：底部状态栏紧凑单行
+  - `both`：同时启用上方单行与底部状态栏
+  - `none`：后台静默模式（仍可通过 Agent 工具查询）
+
+---
+
+## 架构设计
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
 │                       Pi Agent TUI                          │
-│  ┌───────────────────────────────────────────────────────┐  │
-│  │ ┌─ SSH Monitor [root@gpu-node-01] (● Connected) ────┐ │  │
-│  │ │ CPU: [██████░░░░] 41.2% (32C) │ RAM: [████████░░] │ │  │
-│  │ │ GPU 0: NVIDIA A100-SXM4-80GB                      │ │  │
-│  │ │   Compute: [████████████████░░] 88% │ VRAM: 78%   │ │  │
-│  │ │   Status: 68°C │ 350W │ PID 48219 (python): 64GB  │ │  │
-│  │ └──────────────────────────────────── ⏱️ 2s refresh ─┘ │  │
-│  └───────────────────────────────────────────────────────┘  │
+│                                                             │
+│  tan@gpu-node  │  CPU 42% (32C)  │  GPU [A100] 88% ...      │
+│  ─────────────────────────────────────────────────────────  │
 │  User Prompt Editor / Conversation Area                     │
 └──────────────────────────┬──────────────────────────────────┘
                            │
@@ -59,112 +55,129 @@ Specifically designed for **Deep Learning Model Training & Remote Cloud GPU Clus
       ┌────────────────────┼────────────────────┐
       ▼                    ▼                    ▼
  /proc/stat           /proc/meminfo        nvidia-smi
- (CPU & Cores)         (RAM & Avail)   (GPU, VRAM, PIDs)
+ (CPU & Cores)         (RAM & Avail)   (GPU, VRAM)
 ```
 
 ---
 
-## 🛠️ Quick Start
+## 安装方法
 
-### 1. Installation
+### 1. 通过 npm 安装（推荐）
 
-You can load this package directly into Pi Agent:
+Pi Agent 原生支持从 npm 仓库拉取并配置插件：
 
 ```bash
-# Load directly during a session
-pi --extension ./pi-server-monitor/dist/index.js
+# 全局安装（永久生效，推荐）
+pi install npm:pi-server-monitor
 
-# Or install it into your local Pi settings
+# 安装指定版本（例如锁定 0.2.0）
+pi install npm:pi-server-monitor@0.2.0
+
+# 仅在当前项目生效（写入当前项目的 .pi/settings.json）
+pi install npm:pi-server-monitor -l
+```
+
+### 2. 免安装临时体验
+
+无需写入本地配置文件，在当前单次会话中直接按需从 npm 临时加载：
+
+```bash
+pi -e npm:pi-server-monitor
+```
+
+### 3. 从 GitHub 仓库直接安装（备用途径）
+
+```bash
+pi install github:newbietan/pi-server-monitor
+```
+
+### 4. 本地源码二次开发与安装
+
+如果你克隆了本仓库进行开发，可以使用本地路径安装：
+
+```bash
+# 全局链接本地开发路径
 pi install ./pi-server-monitor
-```
 
-### 2. Connect to Remote Server
-
-There are 3 ways to specify the SSH target:
-
-#### Method A: CLI Flag
-```bash
-pi -e ./pi-server-monitor/dist/index.js --ssh-monitor root@192.168.1.100
-# or custom port:
-pi -e ./pi-server-monitor/dist/index.js --ssh-monitor root@gpu-cluster.internal:2222
-```
-
-#### Method B: Integrated with Pi's `--ssh` Flag
-If you use Pi's remote execution `--ssh` flag:
-```bash
-pi -e ./pi-server-monitor/dist/index.js --ssh user@my-server:/workspace
-# The monitor automatically detects 'user@my-server' and starts monitoring!
-```
-
-#### Method C: Interactive Slash Commands
-Inside Pi Agent's interactive session:
-```text
-/ssh-mon connect root@192.168.1.100:2222
+# 或单次会话临时加载本地编译产物
+pi --extension ./pi-server-monitor/dist/index.js
 ```
 
 ---
 
-## 💬 Slash Commands
+## 连接与使用
 
-| Command | Description |
+- **自动模式（推荐）**：无需任何手动操作。在对话中只要 AI Agent 执行了涉及远程主机的操作（如运行训练脚本），插件将自动开启监控。
+- **指定参数启动**：
+  ```bash
+  pi --ssh-monitor root@192.168.1.100
+  ```
+- **与 Pi 原生 `--ssh` 联动**：
+  ```bash
+  pi --ssh user@my-server:/workspace
+  ```
+
+---
+
+## 斜杠命令
+
+| 命令 | 说明 |
 |---|---|
-| `/ssh-mon connect <target>` | Connect to `user@host[:port]` and start real-time monitoring |
-| `/ssh-mon disconnect` | Stop monitoring and gracefully close SSH multiplexing sockets |
-| `/ssh-mon interval <seconds>` | Adjust polling frequency (e.g. `/ssh-mon interval 3`) |
-| `/ssh-mon mode <mode>` | Switch display mode: `widget`, `footer`, `both`, or `none` |
-| `/ssh-mon info` | Dump a full snapshot of current hardware status into conversation |
-| `/gpu` | Quick view of all GPU cards, VRAM usage, temperature, and training PIDs |
-| `/ssh-mon help` | Display available commands and usage guide |
+| `/ssh-mon connect <target>` | 手动连接到目标主机并开启监控 |
+| `/ssh-mon disconnect` | 停止监控并关闭释放 SSH 复用连接 |
+| `/ssh-mon interval <seconds>` | 调整轮询频率（例如 `/ssh-mon interval 3`） |
+| `/ssh-mon mode <mode>` | 切换显示模式：`compact`（默认单行）、`widget`、`footer`、`both` 或 `none` |
+| `/ssh-mon info` | 在对话流中打印一次完整的硬件数据快照 |
+| `/gpu` | 快捷查看所有显卡状态、显存剩余、温度及功耗 |
+| `/ssh-mon help` | 查看帮助说明 |
 
 ---
 
-## 🤖 Agent Tool: `get_remote_hardware_info`
+## Agent 原生工具：`get_remote_hardware_info`
 
-The extension automatically registers the `get_remote_hardware_info` tool for the AI Agent.
+插件为 Pi Agent 自动注册了结构化硬件查询工具。
 
-### Tool Definition
-- **Name**: `get_remote_hardware_info`
-- **Parameters**:
-  - `target` *(string, optional)*: Remote SSH target. Defaults to active connected server.
-  - `forceRefresh` *(boolean, optional)*: Force an immediate live query instead of cached real-time metrics.
+### 工具参数定义
+- `target` *(string, optional)*：SSH 目标（user@host 或 user@host:port）。默认使用当前监控中的连接。
+- `forceRefresh` *(boolean, optional)*：是否强制立即发送 SSH 探测而非读取最近缓存。
 
-### Example Prompts for Pi Agent
-- *"Check if the GPU has enough free VRAM for me to increase the batch size from 4 to 8."*
-- *"Is the training script running? Check GPU utilization."*
-- *"Why is training so slow? Check if there's a CPU or memory bottleneck."*
+### 自然语言使用示例
+- “帮我看看远端机器显存还剩多少，够不够增加 batch size？”
+- “检查一下远程服务器上的 GPU 利用率，训练进程是否正常运行中。”
+- “帮我分析一下为什么训练很慢，是不是存在 CPU 或内存瓶颈？”
 
 ---
 
-## ⚙️ Requirements
+## 环境要求
 
-- **Local Machine**:
+- **本地机器**：
   - Node.js >= 18
-  - OpenSSH client (`ssh`)
-  - SSH key-based authentication configured to the remote host (so SSH commands do not block for passwords).
-- **Remote Server**:
-  - Linux (Ubuntu/Debian/CentOS/Rocky, etc.)
-  - Python 3 (standard on all deep learning environments; no third-party pip packages required).
-  - `nvidia-smi` (for NVIDIA GPU metrics).
+  - OpenSSH 客户端 (`ssh`)
+  - 到远程主机的 SSH 免密登录已配置（避免密码输入阻塞）
+- **远程服务器**：
+  - Linux（Ubuntu/Debian/CentOS/Rocky 等）
+  - Python 3（使用系统标准库，无需任何额外 pip 安装；若无则自动降级使用纯 Shell 探针）
+  - `nvidia-smi`（用于 NVIDIA GPU 状态采集）
 
 ---
 
-## 🧪 Development & Testing
+## 开发与测试
 
 ```bash
 cd pi-server-monitor
 
-# Install dependencies
+# 安装依赖
 npm install
 
-# Build TypeScript
+# 编译 TypeScript
 npm run build
 
-# Run unit tests
+# 运行单元测试
 npm test
 ```
 
 ---
 
-## 📄 License
+## 开源协议
 
 MIT © [newbietan](https://github.com/newbietan)
