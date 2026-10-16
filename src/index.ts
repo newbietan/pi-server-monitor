@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { ResourceCollector } from "./collector.js";
 import { createRemoteHardwareTool } from "./tool.js";
 import { formatMb, renderCompactWidgetLines, renderFooterStatus, renderWidgetLines } from "./ui.js";
-import { extractSshTargetFromCommand } from "./ssh.js";
+import { extractSshTargetFromCommand, extractSshTargetFromCode } from "./ssh.js";
 import type { DisplayMode } from "./types.js";
 
 export default function sshServerMonitorExtension(pi: ExtensionAPI): void {
@@ -32,17 +32,18 @@ export default function sshServerMonitorExtension(pi: ExtensionAPI): void {
 
     const metrics = collector.getMetrics();
     const intervalSec = collector.getIntervalSec();
+    const lastError = collector.getLastError();
     const theme = activeContext.ui.theme;
 
     // Above editor widget: single compact line by default
     if (displayMode === "compact") {
-      const compactLines = renderCompactWidgetLines(metrics, state, target, theme);
+      const compactLines = renderCompactWidgetLines(metrics, state, target, theme, 200, lastError);
       activeContext.ui.setWidget("ssh-monitor", compactLines, { placement: "aboveEditor" });
     } else if (displayMode === "widget") {
       const widgetLines = renderWidgetLines(metrics, state, target, intervalSec, theme);
       activeContext.ui.setWidget("ssh-monitor", widgetLines, { placement: "aboveEditor" });
     } else if (displayMode === "both") {
-      const compactLines = renderCompactWidgetLines(metrics, state, target, theme);
+      const compactLines = renderCompactWidgetLines(metrics, state, target, theme, 200, lastError);
       activeContext.ui.setWidget("ssh-monitor", compactLines, { placement: "aboveEditor" });
     } else {
       activeContext.ui.setWidget("ssh-monitor", undefined);
@@ -57,8 +58,7 @@ export default function sshServerMonitorExtension(pi: ExtensionAPI): void {
     }
   }
 
-  function detectAndActivateSsh(commandStr: string, ctx?: ExtensionContext): void {
-    const detectedTarget = extractSshTargetFromCommand(commandStr);
+  function detectAndActivateSsh(detectedTarget: string | null, ctx?: ExtensionContext): void {
     if (!detectedTarget) return;
 
     const currentTarget = collector.getTarget();
@@ -68,7 +68,7 @@ export default function sshServerMonitorExtension(pi: ExtensionAPI): void {
     if (!currentTarget || currentTarget.raw !== detectedTarget || currentState === "idle" || currentState === "stopped") {
       collector.setTarget(detectedTarget);
       collector.start();
-      if (ctx && ctx.hasUI) {
+      if (ctx?.hasUI) {
         ctx.ui.notify(`🖥️ 检测到 SSH 远程操作，已自动启用硬件监控: ${detectedTarget}`, "info");
       }
       refreshUI();
@@ -90,25 +90,23 @@ export default function sshServerMonitorExtension(pi: ExtensionAPI): void {
   // Seamless auto-detection: watch Agent tool calls (bash, powershell, custom tools)
   pi.on("tool_call", (event, ctx) => {
     activeContext = ctx;
-    let cmdToInspect = "";
-    if (event.toolName === "bash" || event.toolName === "powershell") {
-      cmdToInspect = (event.input as Record<string, unknown>)?.command as string || "";
-    } else if (typeof (event.input as Record<string, unknown>)?.command === "string") {
-      cmdToInspect = (event.input as Record<string, unknown>).command as string;
-    } else if (typeof (event.input as Record<string, unknown>)?.cmd === "string") {
-      cmdToInspect = (event.input as Record<string, unknown>).cmd as string;
+    const input = event.input as Record<string, unknown>;
+    let detected: string | null = null;
+    if (typeof input?.command === "string") {
+      detected = extractSshTargetFromCommand(input.command);
+    } else if (typeof input?.cmd === "string") {
+      detected = extractSshTargetFromCommand(input.cmd);
+    } else if (typeof input?.code === "string" && typeof input.language === "string") {
+      detected = extractSshTargetFromCode(input.code, input.language);
     }
-
-    if (cmdToInspect) {
-      detectAndActivateSsh(cmdToInspect, ctx);
-    }
+    detectAndActivateSsh(detected, ctx);
   });
 
   // Also watch interactive user bash commands (e.g. !ssh user@host)
   pi.on("user_bash", (event, ctx) => {
     activeContext = ctx;
     if (event.command) {
-      detectAndActivateSsh(event.command, ctx);
+      detectAndActivateSsh(extractSshTargetFromCommand(event.command), ctx);
     }
   });
 
@@ -122,13 +120,9 @@ export default function sshServerMonitorExtension(pi: ExtensionAPI): void {
     if (!target) {
       const piSshFlag = pi.getFlag("ssh") as string | undefined;
       if (piSshFlag) {
-        // Handle user@host:/path syntax from pi --ssh flag
-        if (piSshFlag.includes(":")) {
-          const colonIdx = piSshFlag.indexOf(":");
-          target = piSshFlag.slice(0, colonIdx);
-        } else {
-          target = piSshFlag;
-        }
+        // The SSH remote-execution extension accepts user@host:/path.
+        // Keep bracketed IPv6 addresses intact when removing the remote path.
+        target = /^((?:[^@\s:]+@)?(?:\[[^\]]+\]|[^:\s]+))(?::.*)?$/.exec(piSshFlag)?.[1] ?? piSshFlag;
       }
     }
 
@@ -136,12 +130,22 @@ export default function sshServerMonitorExtension(pi: ExtensionAPI): void {
       target = process.env.PI_SSH_TARGET;
     }
 
+    // Do not infer a target from project scripts or unrelated settings.
+    const interval = Number(process.env.PI_SSH_INTERVAL);
+    if (Number.isFinite(interval) && interval >= 1 && interval * 1000 <= 2_147_483_647) {
+      collector.setInterval(interval);
+    }
+
     // Only start if explicitly specified at startup; otherwise wait for seamless auto-detection
     if (target) {
-      collector.setTarget(target);
-      collector.start();
-      ctx.ui.notify(`SSH Monitor connected to ${target}`, "info");
-      refreshUI();
+      try {
+        collector.setTarget(target);
+        collector.start();
+        if (ctx.hasUI) ctx.ui.notify(`SSH Monitor connecting to ${target}...`, "info");
+        refreshUI();
+      } catch (err: unknown) {
+        if (ctx.hasUI) ctx.ui.notify(`Invalid SSH monitor target: ${String(err)}`, "error");
+      }
     }
   });
 
@@ -189,8 +193,8 @@ export default function sshServerMonitorExtension(pi: ExtensionAPI): void {
         }
 
         case "interval": {
-          const val = Number.parseInt(parts[1], 10);
-          if (isNaN(val) || val < 1) {
+          const val = Number(parts[1]);
+          if (!Number.isFinite(val) || val < 1 || val * 1000 > 2_147_483_647) {
             ctx.ui.notify("Usage: /ssh-mon interval <seconds (>=1)>", "error");
             return;
           }

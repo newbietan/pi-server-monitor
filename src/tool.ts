@@ -2,15 +2,14 @@ import { Type, type Static } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ResourceCollector } from "./collector.js";
 import { formatMb } from "./ui.js";
-import { executeRemoteCommand } from "./ssh.js";
+import { executeRemoteCommand, parseSshTarget } from "./ssh.js";
 import { getProbeCommand, parseProbeOutput } from "./probe.js";
-import { parseSshTarget } from "./ssh.js";
 
 export const RemoteHardwareParams = Type.Object({
   target: Type.Optional(
     Type.String({
       description:
-        "Optional SSH target (user@host or user@host:port). Defaults to the current active SSH monitor target.",
+        "Optional SSH target (user@host or user@host:port). Defaults to the current SSH monitor target. An explicit different target is queried once without switching or starting continuous monitoring.",
     })
   ),
   forceRefresh: Type.Optional(
@@ -48,16 +47,19 @@ export function createRemoteHardwareTool(collector: ResourceCollector): ToolDefi
         };
       }
 
-      // If user specified a different target, or requested forceRefresh, or no cached metrics exist yet
-      if (params.target || params.forceRefresh || !metrics) {
+      // Only reuse live monitoring data; one-shot or failed monitors need a fresh probe.
+      if (params.target || params.forceRefresh || !metrics || collector.getState() !== "connected") {
         try {
-          const target = parseSshTarget(targetStr);
-          const raw = await executeRemoteCommand(target, getProbeCommand(), 7000, signal);
-          const parsed = parseProbeOutput(raw);
-          if (!parsed) {
-            throw new Error("Unable to parse probe output from remote host");
+          if (currentTarget?.raw === targetStr) {
+            metrics = await collector.fetchOnce(signal);
+          } else {
+            // Explicit one-shot queries must not silently switch or start the monitor.
+            const target = parseSshTarget(targetStr);
+            const raw = await executeRemoteCommand(target, getProbeCommand(), undefined, signal);
+            const parsed = parseProbeOutput(raw);
+            if (!parsed) throw new Error("Unable to parse probe output from remote host");
+            metrics = parsed;
           }
-          metrics = parsed;
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
           return {

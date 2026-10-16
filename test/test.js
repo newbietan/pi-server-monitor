@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseSshTarget, getControlPath, extractSshTargetFromCommand } from "../dist/ssh.js";
+import { parseSshTarget, getControlPath, extractSshTargetFromCommand, extractSshTargetFromCode } from "../dist/ssh.js";
 import { parseProbeOutput } from "../dist/probe.js";
 import { renderWidgetLines, renderCompactWidgetLines, renderFooterStatus, formatMb, renderProgressBar } from "../dist/ui.js";
 import { ResourceCollector } from "../dist/collector.js";
@@ -27,6 +27,17 @@ test("extractSshTargetFromCommand - auto-detects targets correctly", () => {
 
   // SCP command
   assert.equal(extractSshTargetFromCommand("scp -P 22022 weights.pt user@storage-node:/data/"), "user@storage-node:22022");
+
+  // RSYNC command
+  assert.equal(extractSshTargetFromCommand("rsync -az ./dist/ user@remote-host:/opt/app/"), "user@remote-host");
+  assert.equal(extractSshTargetFromCommand("rsync -az gpu-node:workspace/ ./local/"), "gpu-node");
+
+  // Script names and arbitrary --host options do not imply an SSH connection.
+  assert.equal(extractSshTargetFromCommand("./scripts/sync.sh push"), null);
+  assert.equal(extractSshTargetFromCommand("./scripts/sync.sh pull --host gpu-node"), null);
+
+  // Literal Python subprocess argv uses the same SSH option parser.
+  assert.equal(extractSshTargetFromCode("subprocess.run(['ssh', '-p', '2222', 'gpu-node', 'nvidia-smi'])", "python"), "gpu-node:2222");
 
   // Excluded domains (github, gitlab, huggingface, etc.)
   assert.equal(extractSshTargetFromCommand("git clone git@github.com:my-org/my-repo.git"), null);
@@ -271,11 +282,13 @@ test("ResourceCollector and Tool integration", async () => {
   assert.equal(tool.name, "get_remote_hardware_info");
   assert.ok(tool.description.includes("hardware resource metrics"));
 
-  // Execute tool without cached metrics and invalid host to verify error handling
+  // A cancelled query verifies error handling without contacting any real host.
+  const controller = new AbortController();
+  controller.abort();
   const result = await tool.execute(
     "call-1",
-    { target: "invalid.nonexistent.domain.xyz:9999", forceRefresh: true },
-    undefined,
+    { target: "test-node:9999", forceRefresh: true },
+    controller.signal,
     undefined,
     {}
   );

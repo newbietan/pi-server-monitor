@@ -202,17 +202,33 @@ export function renderCompactWidgetLines(
   state: MonitorConnectionState,
   target: SshTarget | null,
   theme?: ThemeLike,
-  maxWidth = 200
+  maxWidth = 200,
+  lastError?: string | null
 ): string[] {
-  const targetLabel = target ? (target.user ? `${target.user}@${target.host}` : target.host) : "Remote";
+  const targetLabel = target?.raw || "Remote";
+  const statusLine = (text: string, color: string): string[] => {
+    const styled = theme ? theme.fg(color, text) : text;
+    return [maxWidth > 0 ? truncateToWidth(styled, maxWidth) : styled];
+  };
 
-  if (state === "connecting" && !metrics) {
-    const text = `SSH [${targetLabel}]: 正在连接并探测硬件资源...`;
-    return [theme ? theme.fg("warning", text) : text];
+  if (state === "connecting") {
+    return statusLine(`SSH [${targetLabel}]: 正在连接并探测硬件资源...`, "warning");
   }
-  if (state === "error" && !metrics) {
-    const text = `SSH [${targetLabel}]: 连接失败 (请检查 SSH 秘钥/端口)`;
-    return [theme ? theme.fg("error", text) : text];
+  if (state === "error") {
+    let errHint = "连接失败 (正在自动重试...)";
+    if (lastError) {
+      if (/timed?\s*out/i.test(lastError)) {
+        errHint = "连接超时 (正在自动重试...)";
+      } else if (/permission denied|publickey|authentication/i.test(lastError)) {
+        errHint = "认证失败 (请检查 SSH 秘钥)";
+      } else if (/connection refused/i.test(lastError)) {
+        errHint = "连接被拒 (请检查端口/服务状态)";
+      } else if (/could not resolve/i.test(lastError)) {
+        errHint = "主机名解析失败";
+      }
+    }
+    const text = `SSH [${targetLabel}]: ${errHint}${metrics ? " (上次数据已过期)" : ""}`;
+    return statusLine(text, "error");
   }
   if (!metrics) {
     return [];

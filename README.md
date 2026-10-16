@@ -69,15 +69,39 @@ pi install github:newbietan/pi-server-monitor
 
 ## 连接与使用
 
-- **自动模式（推荐）**：无需任何手动操作。在对话中只要 AI Agent 执行了涉及远程主机的操作（如运行训练脚本），插件将自动开启监控。
+- **自动模式（推荐）**：从 Agent 工具的 `command` / `cmd` 或用户的 `!` 命令中识别 `ssh`、`scp`、`sftp` 及使用 SSH 传输的 `rsync`。支持 SSH 配置别名、显式端口，以及带 `language` 的 Shell 代码和 Python 字面量 `subprocess` 参数列表。
 - **指定参数启动**：
   ```bash
   pi --ssh-monitor root@192.168.1.100
   ```
-- **与 Pi 原生 `--ssh` 联动**：
+- **与注册了 `--ssh` 参数的远程执行扩展联动**：
   ```bash
   pi --ssh user@my-server:/workspace
   ```
+
+---
+
+### 自动识别的边界
+
+插件不会根据脚本名称、`--host` 参数或项目配置中的普通 `target` 字段猜测主机，也不会读取或执行同步脚本。对于只暴露包装脚本的命令，请显式指定目标：
+
+```bash
+PI_SSH_TARGET=user@my-server pi
+# 或在 Pi 中执行：/ssh-mon connect user@my-server
+```
+
+引号中的说明文字、注释、heredoc、动态 Python 参数列表和 rsync daemon 传输不触发自动识别。复杂的认证、跳板机和代理设置请放在 `~/.ssh/config` 中；监控连接不会复制命令中的任意 SSH 选项。
+
+### 环境变量
+
+| 变量 | 说明 | 默认值 |
+|---|---|---|
+| `PI_SSH_TARGET` | 显式指定监控目标；优先级低于 `--ssh-monitor` 和 `--ssh` | 无 |
+| `PI_SSH_INTERVAL` | 正常轮询间隔，单位秒，至少 1 秒 | `2` |
+| `PI_SSH_TIMEOUT` | 每次探测的总超时，单位毫秒，正数 | `20000` |
+| `PI_SSH_CONNECT_TIMEOUT` | SSH 连接超时，单位秒，正数 | `15` |
+
+非法数值会回退到默认值。连接失败时重试间隔至少为 5 秒，成功后恢复正常频率；切换主机时会清空旧数据并忽略旧请求结果。紧凑模式会区分超时、认证、端口拒绝和主机名解析错误，不把缓存数据显示为实时状态。
 
 ---
 
@@ -102,6 +126,8 @@ pi install github:newbietan/pi-server-monitor
 ### 工具参数定义
 - `target` *(string, optional)*：SSH 目标（user@host 或 user@host:port）。默认使用当前监控中的连接。
 - `forceRefresh` *(boolean, optional)*：是否强制立即发送 SSH 探测而非读取最近缓存。
+
+显式指定其他 `target` 时仅执行一次查询，不会启动或切换持续监控。刷新当前目标时会更新其缓存；持续监控请使用自动识别或 `/ssh-mon connect`。
 
 ### 自然语言使用示例
 - “帮我看看远端机器显存还剩多少，够不够增加 batch size？”

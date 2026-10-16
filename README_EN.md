@@ -69,15 +69,39 @@ pi install github:newbietan/pi-server-monitor
 
 ## Connection & Usage
 
-- **Automatic Mode (Recommended)**: No manual command needed. When the AI Agent executes remote tasks over SSH, monitoring starts automatically.
+- **Automatic Mode (Recommended)**: Detects `ssh`, `scp`, `sftp`, and SSH-based `rsync` from tool `command` / `cmd` inputs and user `!` commands. Supports SSH config aliases, explicit ports, and language-tagged Shell code or literal Python `subprocess` argument lists.
 - **CLI Flag**:
   ```bash
   pi --ssh-monitor root@192.168.1.100
   ```
-- **Integrated with Pi's `--ssh` Flag**:
+- **Integration with a remote-execution extension that registers `--ssh`**:
   ```bash
   pi --ssh user@my-server:/workspace
   ```
+
+---
+
+### Detection Boundaries
+
+The extension never infers a host from a script name, an arbitrary `--host` option, or a generic project configuration `target` field. It does not read or execute synchronization scripts. When commands only expose a wrapper script, specify the monitoring target explicitly:
+
+```bash
+PI_SSH_TARGET=user@my-server pi
+# Or run in Pi: /ssh-mon connect user@my-server
+```
+
+Quoted documentation, comments, heredocs, dynamic Python argument lists, and rsync daemon transfers do not activate detection. Put authentication, jump-host, and proxy settings in `~/.ssh/config`; monitoring does not copy arbitrary SSH options from observed commands.
+
+### Environment Variables
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `PI_SSH_TARGET` | Explicit target; lower precedence than `--ssh-monitor` and `--ssh` | None |
+| `PI_SSH_INTERVAL` | Normal polling interval in seconds, at least 1 | `2` |
+| `PI_SSH_TIMEOUT` | Total timeout per probe in milliseconds, positive | `20000` |
+| `PI_SSH_CONNECT_TIMEOUT` | SSH connection timeout in seconds, positive | `15` |
+
+Invalid numeric values fall back to defaults. Failed polls retry no faster than every 5 seconds; successful polls restore the normal interval. Switching hosts clears cached metrics and ignores results from previous requests. Compact mode distinguishes timeout, authentication, refused connections, and DNS errors instead of displaying stale metrics as live data.
 
 ---
 
@@ -102,6 +126,8 @@ The extension automatically registers `get_remote_hardware_info` for the AI Agen
 ### Parameters
 - `target` *(string, optional)*: Remote SSH target (`user@host` or `user@host:port`). Defaults to currently connected host.
 - `forceRefresh` *(boolean, optional)*: Force an immediate live query instead of returning cached metrics.
+
+An explicit different `target` is queried once without starting or switching continuous monitoring. Refreshing the current target updates its cache. Use automatic detection or `/ssh-mon connect` for continuous monitoring.
 
 ### Example Prompts for Pi Agent
 - *"Check if the GPU has enough free VRAM for me to increase the batch size from 4 to 8."*

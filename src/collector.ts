@@ -1,10 +1,3 @@
-declare const setTimeout: (fn: () => void, ms?: number) => unknown;
-declare const clearTimeout: (timerId: unknown) => void;
-declare class AbortController {
-  readonly signal: any;
-  abort(): void;
-}
-
 import type { HardwareMetrics, MonitorConnectionState, SshTarget } from "./types.js";
 import { parseSshTarget, executeRemoteCommand, closeSshConnection } from "./ssh.js";
 import { getProbeCommand, parseProbeOutput } from "./probe.js";
@@ -18,7 +11,8 @@ export class ResourceCollector {
   private state: MonitorConnectionState = "idle";
   private latestMetrics: HardwareMetrics | null = null;
   private lastError: string | null = null;
-  private timer: unknown = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private generation = 0;
   private abortController: AbortController | null = null;
   private isRunning = false;
   private isFetching = false;
@@ -30,17 +24,25 @@ export class ResourceCollector {
     if (targetString) {
       this.target = parseSshTarget(targetString);
     }
-    this.intervalMs = Math.max(1000, intervalSec * 1000);
+    this.setInterval(intervalSec);
   }
 
   public setTarget(targetString: string): void {
     const newTarget = parseSshTarget(targetString);
-    if (this.target && this.target.raw !== newTarget.raw) {
-      // Close previous connection if running
-      void closeSshConnection(this.target);
-    }
+    if (this.target?.raw === newTarget.raw) return;
+    const previousTarget = this.target;
+    this.generation++;
+    this.abortController?.abort();
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
     this.target = newTarget;
+    this.latestMetrics = null;
     this.lastError = null;
+    if (previousTarget) void closeSshConnection(previousTarget);
+    if (this.isRunning) {
+      this.setState("connecting");
+      void this.pollImmediately();
+    }
   }
 
   public getTarget(): SshTarget | null {
@@ -48,11 +50,14 @@ export class ResourceCollector {
   }
 
   public setInterval(intervalSec: number): void {
-    this.intervalMs = Math.max(1000, intervalSec * 1000);
+    if (!Number.isFinite(intervalSec) || intervalSec < 1 || intervalSec * 1000 > 2_147_483_647) {
+      throw new RangeError("SSH monitor interval must be at least 1 second and fit within a Node.js timer");
+    }
+    this.intervalMs = intervalSec * 1000;
   }
 
   public getIntervalSec(): number {
-    return Math.round(this.intervalMs / 1000);
+    return this.intervalMs / 1000;
   }
 
   public getMetrics(): HardwareMetrics | null {
@@ -91,6 +96,8 @@ export class ResourceCollector {
 
   public async stop(): Promise<void> {
     this.isRunning = false;
+    this.generation++;
+    this.setState("stopped");
 
     if (this.timer) {
       clearTimeout(this.timer);
@@ -105,34 +112,37 @@ export class ResourceCollector {
     if (this.target) {
       await closeSshConnection(this.target);
     }
-
-    this.setState("stopped");
   }
 
-  public async fetchOnce(): Promise<HardwareMetrics | null> {
+  public async fetchOnce(signal?: AbortSignal): Promise<HardwareMetrics> {
     if (!this.target) {
       throw new Error("No SSH target configured");
     }
 
+    const target = this.target;
+    const generation = this.generation;
     const command = getProbeCommand();
-    const abortCtrl = new AbortController();
-    const timeout = Math.min(8000, Math.max(4000, this.intervalMs * 2));
 
     try {
-      const output = await executeRemoteCommand(this.target, command, timeout, abortCtrl.signal);
+      const output = await executeRemoteCommand(target, command, undefined, signal);
       const metrics = parseProbeOutput(output);
       if (!metrics) {
         throw new Error("Failed to parse remote metrics output");
       }
-      this.latestMetrics = metrics;
-      this.lastError = null;
-      this.setState("connected");
-      this.notifyMetrics(metrics);
+      if (generation === this.generation) {
+        this.latestMetrics = metrics;
+        this.lastError = null;
+        // A snapshot must not make an idle/stopped monitor appear active.
+        if (this.isRunning) this.setState("connected");
+        this.notifyMetrics(metrics);
+      }
       return metrics;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.lastError = msg;
-      this.setState("error", msg);
+      if (generation === this.generation && !signal?.aborted) {
+        this.lastError = msg;
+        if (this.isRunning) this.setState("error", msg);
+      }
       throw err;
     }
   }
@@ -141,19 +151,16 @@ export class ResourceCollector {
     if (!this.isRunning || this.isFetching) return;
 
     this.isFetching = true;
+    const generation = this.generation;
+    const target = this.target;
     this.abortController = new AbortController();
 
     try {
-      if (this.target) {
-        const command = getProbeCommand();
-        const timeout = Math.min(6000, this.intervalMs + 2000);
+      if (target) {
         const output = await executeRemoteCommand(
-          this.target,
-          command,
-          timeout,
-          this.abortController.signal
+          target, getProbeCommand(), undefined, this.abortController.signal
         );
-
+        if (!this.isRunning || generation !== this.generation) return;
         const metrics = parseProbeOutput(output);
         if (metrics) {
           this.latestMetrics = metrics;
@@ -165,7 +172,7 @@ export class ResourceCollector {
         }
       }
     } catch (err: unknown) {
-      if (this.isRunning) {
+      if (this.isRunning && generation === this.generation) {
         const msg = err instanceof Error ? err.message : String(err);
         this.lastError = msg;
         this.setState("error", msg);
@@ -175,16 +182,18 @@ export class ResourceCollector {
       this.abortController = null;
 
       if (this.isRunning) {
-        this.scheduleNextPoll();
+        this.scheduleNextPoll(generation !== this.generation);
       }
     }
   }
 
-  private scheduleNextPoll(): void {
+  private scheduleNextPoll(immediate = false): void {
     if (this.timer) clearTimeout(this.timer);
+    let delay = this.lastError ? Math.max(5000, this.intervalMs) : this.intervalMs;
+    if (immediate) delay = 0;
     this.timer = setTimeout(() => {
       void this.pollImmediately();
-    }, this.intervalMs);
+    }, delay);
   }
 
   private setState(state: MonitorConnectionState, error?: string): void {
